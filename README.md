@@ -8,4 +8,6 @@
 
 ![ft1](https://i.imgur.com/VryriLK.png)
 
-![ft2](https://i.imgur.com/NwtCwEw.png)
+![ft2](https://i.imgur.com/yZEkqhs.png)
+
+![ft3](https://i.imgur.com/xHWYjiG.png)
