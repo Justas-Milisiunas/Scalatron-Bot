@@ -1,4 +1,6 @@
 import scala.collection.mutable
+import scala.util.Random
+import scala.util.control.Breaks._
 
 object ControlFunction {
   /**
@@ -7,11 +9,17 @@ object ControlFunction {
    * @param bot Bot
    */
   def forMaster(bot: Bot): Unit = {
-    val targetPriority = Array('B', 'P', '?')
+    val targetPriority = Array('P', 'B', '?')
     val direction = directionToBestTarget(bot, targetPriority)
-    bot.move(direction._1)
+    if (direction._1 == XY.Zero) {
+      bot.log("Moving random direction")
+      bot.move(XY.randomDirection)
+    } else {
+      bot.log("Moving by path direction target type: " + direction._2.toString)
+      bot.move(direction._1)
+    }
 
-    if (bot.energy >= 200 && bot.slaves < 4) {
+    if (bot.energy >= 200) {
       tryLaunchMissile(bot)
     }
   }
@@ -24,24 +32,36 @@ object ControlFunction {
    * @return Best direction to target
    */
   def directionToBestTarget(bot: Bot, targetPriority: Array[Char]): (XY, Char) = {
-    for (target <- targetPriority) {
-      bot.view.offsetToNearest(target) match {
-        case Some(offset) =>
-          bot.log("[Mini-Bot] Nearest offset found: " + offset)
-          bot.view.getPathBFS(offset, bot) match {
-            case Some(path) =>
-              var pathString = "Found path:\n"
-              for (shit <- path) {
-                pathString += shit.toString + "\n"
-              }
+    var nearestTarget = (XY(100, 100), ' ')
 
-              bot.log(pathString)
-              return (path(0), target)
-            case None =>
-              bot.log("[Mini-Bot] Nearest path not found: ")
+    breakable {
+      for (target <- targetPriority) {
+        if(target == '?' && nearestTarget._2 != ' ')
+          break
+
+        bot.view.offsetToNearest(target) match {
+          case Some(offset) =>
+            if (offset.length < nearestTarget._1.length)
+              nearestTarget = (offset, target)
+
+          case None =>
+            bot.log("[Mini-Bot] Nearest offset not found: ")
+        }
+      }
+    }
+
+    if (nearestTarget._2 != ' ') {
+      bot.view.getPathBFS(nearestTarget._1, bot) match {
+        case Some(path) =>
+          var pathString = "Found path:\n"
+          for (shit <- path) {
+            pathString += shit.toString + "\n"
           }
+
+          bot.log(pathString)
+          return (path(0), nearestTarget._2)
         case None =>
-          bot.log("[Mini-Bot] Nearest offset not found: ")
+          bot.log("[Mini-Bot] Nearest path not found: ")
       }
     }
 
@@ -54,7 +74,13 @@ object ControlFunction {
    * @param bot Bot
    */
   def tryLaunchMissile(bot: Bot): Unit = {
-    // Bus prideta po gynimo
+    bot.view.offsetToNearest('m') match {
+      case Some(offset) =>
+        bot.log("Missile launched!")
+        val mine = bot.slaves == 0
+        bot.spawn(offset, ("slaveDirection", offset), ("isMine", mine))
+      case None =>
+    }
   }
 
   /**
@@ -63,11 +89,27 @@ object ControlFunction {
    * @param bot Bot
    */
   def forSlave(bot: MiniBot): Unit = {
-    val targetPriority = Array('m', 'b')
-    val direction = directionToBestTarget(bot, targetPriority)
-    bot.move(direction._1)
+    var targetType = 'b'
+    if(!bot.isMine) {
+      val targetPriority = Array('m')
+      val direction = directionToBestTarget(bot, targetPriority)
+      bot.move(direction._1)
+      targetType = direction._2
+    } else {
+      bot.say("Mine")
+    }
 
-    // Bus prideta po gynimo
+    if (bot.collision.isDefined) {
+      bot.explode(3)
+    }
+    else
+      bot.view.offsetToNearest(targetType) match {
+        case Some(offset) =>
+          val distance = offset.length
+          if (distance < 3)
+            bot.explode(6)
+        case None =>
+      }
   }
 }
 
@@ -123,7 +165,28 @@ case class View(cells: String) {
    * @return
    */
   def getPathBFS(position: XY, bot: Bot): Option[Array[XY]] = {
-    // Bus prideta po gynimo
+    val positionAbs = this.absPosFromRelPos(position)
+    var visitedCells = Set[(XY, XY)]()
+    var queue = mutable.Queue[XY]()
+    val centerPos = this.center
+
+
+    queue.enqueue(centerPos)
+    while (queue.nonEmpty) {
+      val current = queue.dequeue()
+
+      val neighbours = getNeighbours(current, bot)
+      for (neighbour <- neighbours) {
+        // Checks if current neighbour was not visited
+        if (!visitedCells.exists(c => c._1.equals(neighbour))) {
+          visitedCells += Tuple2(neighbour, current)
+          if (neighbour.equals(positionAbs))
+            return Some(extractPath(centerPos, positionAbs, visitedCells))
+
+          queue.enqueue(neighbour)
+        }
+      }
+    }
 
     None
   }
@@ -157,9 +220,28 @@ case class View(cells: String) {
    * @return Position's neighbours
    */
   def getNeighbours(position: XY, bot: Bot): Set[XY] = {
-    // Bus prideta po gynimo
+    var neighbours = Set[XY]()
 
-    Set.empty
+    val allCells = Array(XY.UpLeft, XY.Up, XY.RightUp, XY.Right, XY.DownRight, XY.Down, XY.LeftDown, XY.Left)
+    for (cell <- allCells) {
+      val cellAbsPos = position + cell
+      if (cellAbsPos.x >= 0 && cellAbsPos.x < size &&
+        cellAbsPos.y >= 0 && cellAbsPos.y < size) {
+        val cellValue = this.cellAtAbsPos(position + cell)
+        if (cellValue != 'W' && cellValue != 'M' && cellValue != 'S' &&
+          cellValue != 's' && cellValue != 'p') {
+
+          if (!bot.isSlave) {
+            if (cellValue != 'm' && cellValue != 'b')
+              neighbours += cell + position
+          } else {
+            neighbours += cell + position
+          }
+        }
+      }
+    }
+
+    neighbours
   }
 }
 
@@ -206,6 +288,8 @@ object XY {
     XY(xy(0), xy(1))
   }
 
+  val rnd = new Random
+
   val Zero: XY = XY(0, 0)
   val One: XY = XY(1, 1)
 
@@ -217,6 +301,11 @@ object XY {
   val LeftDown: XY = XY(-1, 1)
   val Down: XY = XY(0, 1)
   val DownRight: XY = XY(1, 1)
+
+  def randomDirection: XY = {
+    val allDirections = Array(XY.UpLeft, XY.Up, XY.RightUp, XY.Right, XY.DownRight, XY.Down, XY.LeftDown, XY.Left)
+    allDirections(rnd.nextInt(8))
+  }
 }
 
 /**
@@ -281,6 +370,8 @@ trait Bot {
   def lastPosition: XY
 
   def isSlave: Boolean
+
+  def isMine: Boolean
 
   // outputs
   def move(delta: XY): Bot
@@ -348,6 +439,13 @@ case class BotImpl(inputParams: Map[String, String]) extends MiniBot {
     case None => XY(-10, -10)
   }
 
+  var isMine: Boolean = inputParams.get("isMine") match {
+    case Some(state) =>
+      state.toBoolean
+    case None =>
+      false
+  }
+
   def offsetToMaster: XY = inputAsXYOrElse("master", XY.Zero)
 
 
@@ -368,6 +466,7 @@ case class BotImpl(inputParams: Map[String, String]) extends MiniBot {
     set(("spawnedBots", spawnedBots))
     set(("slaveDirection", slaveDirection))
     set(("lastPosition", lastPosition))
+    set(("isMine", isMine))
 
     var result = commands
     if (stateParams.nonEmpty) {
